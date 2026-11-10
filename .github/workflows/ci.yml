@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - main
+      # The fork's default branch: this is where its work lands, so CI has to
+      # run here for branch protection to mean anything.
+      - claude-subscription
   workflow_dispatch:
 
 permissions:
