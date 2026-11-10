@@ -24,6 +24,7 @@ and swaps it for an ``Authorization: Bearer`` header with the mandatory
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import logging
 import time
@@ -37,11 +38,6 @@ from strix.utils.secret_files import write_secret_text
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-try:  # POSIX only; the Windows fallback is a no-op guard.
-    import fcntl
-except ImportError:  # pragma: no cover - Windows
-    fcntl = None
 
 
 logger = logging.getLogger(__name__)
@@ -111,9 +107,6 @@ def logout() -> None:
 @contextlib.contextmanager
 def _refresh_guard() -> Iterator[None]:
     """Serialize refresh across Strix processes; the refresh token is single-use."""
-    if fcntl is None:  # Windows: no lock, callers stay correct without one.
-        yield
-        return
     try:
         lock_path = AUTH_PATH.with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
