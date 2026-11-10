@@ -39,7 +39,7 @@ from openai.types.responses.response_usage import ResponseUsage
 from openai.types.shared import Reasoning
 
 from strix.agents.prompt import CACHE_POINT
-from strix.config import codex
+from strix.config import claude_subscription, codex
 from strix.config.loader import load_settings
 from strix.config.tool_call_arguments import repair_input
 from strix.config.tool_call_ids import TurnCallIdRewriter, dedupe_input
@@ -400,6 +400,15 @@ def _split_cached_prefix(
     LiteLLM puts a cache point at the end of each system message, so each part
     gets its own. Other routes get the prompt with the markers removed.
     """
+    if claude_subscription.auth_mode(load_settings().llm.model) == "subscription":
+        model_input = _as_message_list(model_input)
+        return None, [
+            {
+                "role": "system",
+                "content": claude_subscription.apply_identity_blocks(system_instructions),
+            },
+            *model_input,
+        ]
     if not system_instructions or CACHE_POINT not in system_instructions:
         return system_instructions, model_input
     extra_args = model_settings.extra_args or {}
@@ -409,6 +418,14 @@ def _split_cached_prefix(
         model_input = [{"role": "user", "content": model_input}]
     parts = [part for part in system_instructions.split(CACHE_POINT) if part.strip()]
     return None, [*({"role": "system", "content": part} for part in parts), *model_input]
+
+
+def _as_message_list(model_input: str | list[Any]) -> list[Any]:
+    return (
+        [{"role": "user", "content": model_input}]
+        if isinstance(model_input, str)
+        else list(model_input)
+    )
 
 
 async def _aclose(stream: AsyncIterator[TResponseStreamEvent]) -> None:
@@ -606,6 +623,8 @@ class StrixProvider(MultiProvider):
                 prefix=prefix,
                 stripped_model_name=stripped_model_name,
             )
+        if prefix in {"claude", "claude-code"} and stripped_model_name:
+            return self._get_fallback_provider("litellm"), f"anthropic/{stripped_model_name}"
         if prefix == "ollama" and stripped_model_name:
             return self._get_fallback_provider("litellm"), f"ollama_chat/{stripped_model_name}"
         return self._get_fallback_provider("litellm"), original_model_name
@@ -617,7 +636,16 @@ class StrixProvider(MultiProvider):
         idle_timeout = float(llm.stream_idle_timeout) or None
         first_event_timeout = float(llm.stream_first_event_timeout) or None
         total_timeout = float(llm.stream_total_timeout) or None
-        if slug:
+        if claude_subscription.subscription_model(model_name):
+            model: Model = request_log.RequestLoggingModel(
+                _claude_subscription_model(model_name or ""),
+                model_name=model_name or "",
+                provider="anthropic-subscription",
+                base_url=None,
+                route="litellm",
+                abandoned_only=True,
+            )
+        elif slug:
             # The ChatGPT subscription backend is always streamed; it has no
             # non-streaming mode to fall back to, so LLM_DISABLE_STREAMING
             # does not apply here.
@@ -667,6 +695,18 @@ class StrixProvider(MultiProvider):
         )
 
 
+def _claude_subscription_model(model_name: str) -> Model:
+    """A LiteLLM Anthropic model carrying the stored Claude Code OAuth token.
+
+    LiteLLM swaps an ``sk-ant-oat`` key for a Bearer header plus the mandatory
+    ``anthropic-beta`` values, so only the key needs supplying here.
+    """
+    from agents.extensions.models.litellm_model import LitellmModel
+
+    slug = claude_subscription.subscription_model(model_name) or model_name
+    return LitellmModel(model=f"anthropic/{slug}", api_key=claude_subscription.get_valid_token())
+
+
 def _routes_via_litellm(model: Model) -> bool:
     """LiteLLM-backed models are captured by the LiteLLM callback, not the wrapper."""
     from agents.extensions.models.litellm_model import LitellmModel
@@ -714,6 +754,9 @@ def configure_sdk_model_defaults(settings: Settings) -> None:
         return
     _configure_litellm_compatibility()
     _configure_attribution(llm.model)
+    if claude_subscription.subscription_model(llm.model):
+        # The token is a per-request credential held by the model, not a global.
+        return
     if llm.api_key:
         set_default_openai_key(llm.api_key, use_for_tracing=False)
         _configure_litellm_default("api_key", llm.api_key)

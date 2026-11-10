@@ -26,3 +26,34 @@ Security testing with Claude needs the [Cyber Verification Program](https://supp
 1. Go to [console.anthropic.com](https://console.anthropic.com)
 2. Navigate to API Keys
 3. Create a new key
+
+## Claude subscription instead of an API key
+
+A Claude plan can pay for inference instead of a metered API key. Set `STRIX_LLM`
+to a `claude/` model and sign in once:
+
+```bash
+strix auth login claude
+export STRIX_LLM="claude/claude-sonnet-5-5"
+```
+
+`strix auth login claude` asks for a token from `claude setup-token`, or reads the
+sign-in Claude Code already has on the machine. The token is stored in
+`~/.strix/claude-subscription-auth.json` and refreshed automatically.
+
+Mythos needs no special setting: set `STRIX_LLM="claude/claude-mythos-5-2"` and the
+subscription route picks it up.
+
+<Note>
+Using a subscription outside Anthropic's own products isn't officially supported by
+Anthropic. The API only accepts these tokens from a request that identifies as Claude
+Code, so Strix sends the Claude Code identity as the first system block and appends its
+own prompt as a second one.
+</Note>
+
+<Warning>
+On an account without [CVP](https://support.claude.com/en/articles/14604842-cyber-verification-program)
+access, Claude answers or refuses per request rather than failing outright, so scans are
+unreliable on offensive tasks. `claude-mythos-*` is only resolved for verified accounts;
+elsewhere the request fails with a `not_found_error` for the model.
+</Warning>

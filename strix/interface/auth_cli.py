@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import logging
+import subprocess
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -21,7 +23,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.config import codex, load_settings
+from strix.config import claude_subscription, codex, load_settings
 
 
 if TYPE_CHECKING:
@@ -38,7 +40,20 @@ _CALLBACK_TIMEOUT_S = 300
 LOGIN_PROVIDER = "chatgpt"
 _ACCEPTED_PROVIDERS = frozenset({LOGIN_PROVIDER, codex.PROVIDER})
 
-_USAGE = "Usage:\n  strix auth login chatgpt [--manual]\n  strix auth status\n  strix auth logout"
+_USAGE = (
+    "Usage:\n"
+    "  strix auth login chatgpt [--manual]\n"
+    "  strix auth login claude [--token]\n"
+    "  strix auth status\n"
+    "  strix auth logout"
+)
+
+CLAUDE_PROVIDER = "claude"
+_ACCEPTED_PROVIDERS = frozenset({LOGIN_PROVIDER, codex.PROVIDER, CLAUDE_PROVIDER, "claude-code"})
+
+
+def _is_claude(value: str) -> bool:
+    return value.lower() in {CLAUDE_PROVIDER, "claude-code"}
 
 
 def run_auth(argv: list[str]) -> int:
@@ -79,17 +94,27 @@ def _login(console: Console, argv: list[str]) -> int:
         action="store_true",
         help="Skip the local callback server and paste the redirect URL by hand.",
     )
+    parser.add_argument(
+        "--token",
+        action="store_true",
+        help="Claude only: paste a token from `claude setup-token` instead of signing in.",
+    )
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:  # argparse already printed the message
         return int(exc.code or 2)
 
-    if args.provider.lower() not in _ACCEPTED_PROVIDERS:
+    provider = args.provider.lower()
+    if provider not in _ACCEPTED_PROVIDERS:
         console.print(
             f"[red]Unsupported provider:[/] {args.provider}. "
-            f"Only '{LOGIN_PROVIDER}' (ChatGPT subscription) is supported."
+            f"Use '{LOGIN_PROVIDER}' (ChatGPT subscription) or '{CLAUDE_PROVIDER}' "
+            "(Claude subscription)."
         )
         return 2
+
+    if _is_claude(provider):
+        return _login_claude(console, use_paste=args.token)
 
     verifier, challenge = codex.generate_pkce()
     state = codex.create_state()
@@ -115,6 +140,97 @@ def _login(console: Console, argv: list[str]) -> int:
     return 0
 
 
+def _login_claude(console: Console, *, use_paste: bool) -> int:
+    """Sign in with a Claude subscription.
+
+    The supported path is a token from `claude setup-token`, which is long-lived
+    and refreshable. A token copied from Claude Code's own keychain entry works
+    too, but Claude Code keeps refreshing it and may rotate the refresh token
+    out from under us, so it is the fallback rather than the default.
+    """
+    console.print()
+    console.print("[bold]Signing in with Claude[/] [dim](provider: claude)[/]")
+    console.print("[dim]This uses your Claude plan for inference instead of a metered API key.[/]")
+    console.print()
+
+    if not use_paste:
+        console.print("Run this in another terminal and paste the token it prints:")
+        console.print("  [cyan]claude setup-token[/]")
+        console.print()
+        console.print(
+            "[dim]Already signed in to Claude Code? Press Enter to read that "
+            "sign-in from the macOS keychain instead.[/]"
+        )
+    try:
+        raw = console.input("Token: " if use_paste else "Token (or Enter): ").strip()
+    except EOFError:
+        console.print("[yellow]No token provided.[/]")
+        return 1
+
+    token = raw or _token_from_keychain()
+    if not token:
+        console.print(
+            "[red]No token.[/] Generate one with [cyan]claude setup-token[/] and try again."
+        )
+        return 1
+    if not token.startswith("sk-ant-oat"):
+        console.print(
+            "[red]That doesn't look like a Claude subscription token[/] "
+            "(expected a value starting with sk-ant-oat)."
+        )
+        return 1
+
+    record: dict[str, Any] = {"type": "oauth", "provider": "claude", "access": token}
+    refresh = _refresh_from_keychain() if not raw else None
+    if refresh:
+        record["refresh"] = refresh
+    try:
+        if refresh:
+            record = claude_subscription.refresh_tokens(refresh)
+    except claude_subscription.ClaudeAuthError as exc:
+        logger.debug("token refresh after login failed", exc_info=exc)
+        record = {"type": "oauth", "provider": "claude", "access": token}
+    claude_subscription.save_record(record)
+    _print_success(console, CLAUDE_PROVIDER)
+    return 0
+
+
+def _token_from_keychain() -> str | None:
+    """The access token Claude Code stored, if it is signed in on this machine."""
+    oauth = _keychain_oauth()
+    token = oauth.get("accessToken") if oauth else None
+    return token if isinstance(token, str) and token else None
+
+
+def _refresh_from_keychain() -> str | None:
+    oauth = _keychain_oauth()
+    refresh = oauth.get("refreshToken") if oauth else None
+    return refresh if isinstance(refresh, str) and refresh else None
+
+
+def _keychain_oauth() -> dict[str, Any] | None:
+    """The ``claudeAiOauth`` record Claude Code keeps in the macOS keychain."""
+    try:
+        raw = subprocess.run(
+            [  # noqa: S607 - `security` lives on PATH, not a fixed path
+                "security",
+                "find-generic-password",
+                "-s",
+                "Claude Code-credentials",
+                "-w",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        ).stdout
+        data = json.loads(raw or "{}")
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return None
+    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    return oauth if isinstance(oauth, dict) else None
+
+
 def _run_oauth_flow(
     console: Console,
     authorize_url: str,
@@ -132,7 +248,7 @@ def _run_oauth_flow(
     if not manual:
         try:
             webbrowser.open(authorize_url)
-        except Exception:  # noqa: BLE001 - opening a browser is best-effort
+        except Exception:
             logger.debug("could not open browser", exc_info=True)
 
     if server is not None:
@@ -244,10 +360,26 @@ def _first(query: dict[str, list[str]], key: str) -> str | None:
 
 def _status(console: Console) -> int:
     record = codex.read_record()
-    if record is None:
-        console.print("[yellow]Not signed in.[/] Run [cyan]strix auth login chatgpt[/] to sign in.")
+    claude_record = claude_subscription.read_record()
+    if record is None and claude_record is None:
+        console.print(
+            "[yellow]Not signed in.[/] Run [cyan]strix auth login chatgpt[/] "
+            "or [cyan]strix auth login claude[/]."
+        )
         return 1
     settings = load_settings()
+
+    if claude_record is not None:
+        console.print("[green]Signed in[/] with a Claude subscription.")
+        if claude_subscription.subscription_model(settings.llm.model):
+            console.print(f"  Runs use the subscription (STRIX_LLM=[bold]{settings.llm.model}[/]).")
+        else:
+            console.print(
+                "  [yellow]Note:[/] set [cyan]STRIX_LLM[/] to e.g. "
+                "[cyan]claude/claude-sonnet-5-5[/] to run on the subscription."
+            )
+        return 0
+
     console.print("[green]Signed in[/] with a ChatGPT subscription.")
     console.print(f"  Account: [bold]{record.get('account_id')}[/]")
     if codex.subscription_model(settings.llm.model):
@@ -262,6 +394,7 @@ def _status(console: Console) -> int:
 
 def _logout(console: Console) -> int:
     codex.logout()
+    claude_subscription.logout()
     console.print("[green]Signed out.[/] Stored subscription credentials removed.")
     return 0
 
@@ -284,7 +417,10 @@ def _fail(console: Console, exc: codex.CodexAuthError) -> int:
     return 1
 
 
-def _print_success(console: Console) -> None:
+def _print_success(console: Console, provider: str = LOGIN_PROVIDER) -> None:
+    if provider == CLAUDE_PROVIDER:
+        _print_claude_success(console)
+        return
     text = Text()
     text.append("Signed in with your ChatGPT subscription", style="bold #22c55e")
     text.append("\n\n", style="white")
@@ -298,6 +434,36 @@ def _print_success(console: Console) -> None:
     text.append("\n\n", style="white")
     text.append("Run a scan as usual, e.g. ", style="white")
     text.append("strix --target https://example.com", style="bold cyan")
+    console.print()
+    console.print(
+        Panel(
+            text,
+            title="[bold white]STRIX",
+            title_align="left",
+            border_style="#22c55e",
+            padding=(1, 2),
+        )
+    )
+    console.print()
+
+
+def _print_claude_success(console: Console) -> None:
+    text = Text()
+    text.append("Signed in with your Claude subscription", style="bold #22c55e")
+    text.append("\n\n", style="white")
+    text.append("Set ", style="white")
+    text.append("STRIX_LLM", style="bold white")
+    text.append(" to a ", style="white")
+    text.append("claude/", style="bold cyan")
+    text.append(" model (e.g. ", style="white")
+    text.append("claude/claude-sonnet-5-5", style="bold cyan")
+    text.append(") — runs are billed to your Claude plan.", style="white")
+    text.append("\n\n", style="dim white")
+    text.append(
+        "Using a subscription outside Anthropic's own products isn't officially "
+        "supported; if a run is refused with a 429, that account may need cyber access.",
+        style="dim white",
+    )
     console.print()
     console.print(
         Panel(

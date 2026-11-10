@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.config import codex, load_settings, persist_current
+from strix.config import claude_subscription, codex, load_settings, persist_current
 from strix.core.paths import RUNS_DIR_NAME, run_dir_for
 from strix.interface.cli_args import (
     FAIL_ON_SEVERITIES,
@@ -85,11 +85,28 @@ def _exception_messages(exc: BaseException) -> tuple[str, ...]:
     return tuple(messages)
 
 
-def _subscription_error_hint(exc: BaseException) -> str | None:
-    """Return an actionable hint for a known ChatGPT-subscription error, or None."""
-    if not codex.subscription_model(load_settings().llm.model):
-        return None
+def _subscription_error_hint(exc: BaseException) -> str | None:  # noqa: PLR0911 - one per case
+    """Return an actionable hint for a known subscription-auth error, or None."""
+    model = load_settings().llm.model
     joined = " ".join(_exception_messages(exc)).lower()
+    if claude_subscription.subscription_model(model):
+        if not claude_subscription.is_authenticated():
+            return (
+                f"STRIX_LLM={model} uses your Claude subscription, "
+                "but you're not signed in.\n  strix auth login claude"
+            )
+        if "withheld by the provider's content filter" in joined:
+            return (
+                "Your Claude plan refused the request on cybersecurity grounds. "
+                "An account with Cyber Verification Program access (Mythos, Red Team "
+                "Access) is needed for offensive testing, and needed at all for Mythos."
+            )
+        return (
+            "Your Claude sign-in has expired or was revoked. Sign in again:\n"
+            "  strix auth login claude"
+        )
+    if not codex.subscription_model(model):
+        return None
     if "not supported when using codex with a chatgpt account" in joined:
         return (
             "This model isn't available on your ChatGPT subscription. "

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from strix.config import codex
+from strix.config import claude_subscription, codex
 from strix.interface import auth_cli
 
 
@@ -16,7 +16,9 @@ if TYPE_CHECKING:
 
 @pytest.fixture(autouse=True)
 def _tmp_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(codex, "AUTH_PATH", tmp_path / "home" / ".strix" / "subscription-auth.json")
+    store = tmp_path / "home" / ".strix"
+    monkeypatch.setattr(codex, "AUTH_PATH", store / "subscription-auth.json")
+    monkeypatch.setattr(claude_subscription, "AUTH_PATH", store / "claude-subscription-auth.json")
 
 
 def test_login_provider_is_chatgpt() -> None:
@@ -104,3 +106,50 @@ def test_login_accepts_provider_aliases(provider: str, monkeypatch: pytest.Monke
 
     assert auth_cli.run_auth(["login", provider]) == 0
     assert reached["flow"] is True
+
+
+@pytest.mark.parametrize("provider", ["claude", "Claude", "claude-code"])
+def test_login_accepts_the_claude_provider(provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(auth_cli, "_keychain_oauth", lambda: None)
+    monkeypatch.setattr("builtins.input", lambda *_: "sk-ant-oat01-pasted")
+
+    assert auth_cli.run_auth(["login", provider, "--token"]) == 0
+    assert claude_subscription.read_record()["access"] == "sk-ant-oat01-pasted"
+
+
+def test_claude_login_falls_back_to_the_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        auth_cli,
+        "_keychain_oauth",
+        lambda: {"accessToken": "sk-ant-oat01-keychain", "refreshToken": "refresh-me"},
+    )
+    monkeypatch.setattr("builtins.input", lambda *_: "")
+    monkeypatch.setattr(
+        claude_subscription,
+        "refresh_tokens",
+        lambda _token: {"type": "oauth", "provider": "claude", "access": "sk-ant-oat01-refreshed"},
+    )
+
+    assert auth_cli.run_auth(["login", "claude"]) == 0
+    assert claude_subscription.read_record()["access"] == "sk-ant-oat01-refreshed"
+
+
+def test_claude_login_rejects_a_non_subscription_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda *_: "sk-ant-api03-an-api-key")
+    assert auth_cli.run_auth(["login", "claude", "--token"]) == 1
+    assert claude_subscription.read_record() is None
+
+
+def test_status_reports_a_claude_sign_in() -> None:
+    claude_subscription.save_record(
+        {"type": "oauth", "provider": "claude", "access": "sk-ant-oat01-x"}
+    )
+    assert auth_cli.run_auth(["status"]) == 0
+
+
+def test_logout_clears_both_providers() -> None:
+    claude_subscription.save_record(
+        {"type": "oauth", "provider": "claude", "access": "sk-ant-oat01-x"}
+    )
+    assert auth_cli.run_auth(["logout"]) == 0
+    assert claude_subscription.read_record() is None

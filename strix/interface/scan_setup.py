@@ -15,7 +15,7 @@ import unicodedata
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from strix.config import Settings, codex, load_settings
+from strix.config import Settings, claude_subscription, codex, load_settings
 from strix.core.paths import run_dir_for
 from strix.interface.utils import (
     assign_workspace_subdirs,
@@ -100,6 +100,13 @@ def check_header_safe_credentials(settings: Settings) -> None:
         )
 
 
+def _preflight_prompt(model_name: str) -> str:
+    """Preflight prompt; the Claude subscription route needs its identity block."""
+    if claude_subscription.subscription_model(model_name):
+        return claude_subscription.IDENTITY_PROMPT
+    return "You are a helpful assistant."
+
+
 async def preflight_model_connection(
     model_name: str,
     *,
@@ -152,7 +159,7 @@ async def preflight_request(
     try:
         await asyncio.wait_for(
             model.get_response(
-                system_instructions="You are a helpful assistant.",
+                system_instructions=_preflight_prompt(model_name),
                 input="Reply with just 'OK'.",
                 model_settings=request_settings,
                 tools=[],
