@@ -248,7 +248,7 @@ def _run_oauth_flow(
     if not manual:
         try:
             webbrowser.open(authorize_url)
-        except Exception:
+        except Exception:  # noqa: BLE001 - opening a browser is best-effort
             logger.debug("could not open browser", exc_info=True)
 
     if server is not None:
