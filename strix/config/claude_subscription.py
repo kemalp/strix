@@ -47,7 +47,7 @@ PROVIDER = "claude"
 # The console OAuth client Claude Code uses. ``setup-token`` and the login flow
 # share it, so a token from either refreshes the same way.
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"  # noqa: S105 - URL, not a secret
+TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"  # noqa: S105  # nosec B105
 
 # Must be the first system block, verbatim, or the subscription route rejects
 # the request as a plain API call with 429.
