@@ -49,9 +49,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv run --frozen pytest -q
 
-  # A fast subset, so a fork's pushes get a real test signal even if the full
-  # matrix is slow or killed at the job timeout. Keep this selector narrow: it
-  # has to stay comfortably inside a few minutes to be worth gating on.
+  # A fast subset, so a fork's pushes get a real test signal. The full matrix
+  # above takes several minutes, and because the workflow sets
+  # cancel-in-progress, pushing again cancels it before it can finish — so a
+  # cancelled matrix is the normal outcome and cannot be what gates a push.
+  # Keep this selector narrow enough to stay well inside a few minutes.
   pytest-fast:
     name: pytest (fast)
     runs-on: ubuntu-latest

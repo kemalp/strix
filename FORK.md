@@ -36,11 +36,13 @@ reports the conflict in that file — resolve it there and keep the `claude/` ro
 report green: `lint` and `pytest (fast)`.
 
 It deliberately does not require the full `pytest (3.12)` / `pytest (3.14)` matrix. That
-matrix takes longer than the job timeout, so it is killed and never resolves — requiring it
-would mean a check that can never turn green. `pytest (fast)` runs the config, routing and
-auth tests in about ten seconds and is the signal that actually matters here; the full matrix
-still runs for information.
+matrix takes over five minutes on a warm local machine, longer on a cold runner, and the
+workflow runs with `cancel-in-progress: true` — so any follow-up push cancels it and the
+check is left `cancelled` rather than green. Gating on it would mean a check that rarely
+resolves. `pytest (fast)` runs the config, routing and auth tests in about ten seconds and is
+the signal that actually matters here; the full matrix still runs and its result is there to
+read when a run happens to finish.
 
 Admins are not enforced, so a direct `git push` to `claude-subscription` overrides the
-checks. Pushes only get the "4 of 4 required status checks are expected" warning, not a
+checks. Pushes only get the "2 of 2 required status checks are expected" warning, not a
 rejection. Nothing here depends on GitHub Actions minutes being available.
