@@ -649,7 +649,7 @@ class StrixProvider(MultiProvider):
             # The ChatGPT subscription backend is always streamed; it has no
             # non-streaming mode to fall back to, so LLM_DISABLE_STREAMING
             # does not apply here.
-            model: Model = request_log.RequestLoggingModel(
+            model = request_log.RequestLoggingModel(
                 _CodexResponsesModel(
                     slug,
                     codex.get_subscription_client(),

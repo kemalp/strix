@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 try:  # POSIX only; the Windows fallback is a no-op guard.
     import fcntl
 except ImportError:  # pragma: no cover - Windows
-    fcntl = None  # type: ignore[assignment]
+    fcntl = None
 
 
 logger = logging.getLogger(__name__)
@@ -111,14 +111,14 @@ def logout() -> None:
 @contextlib.contextmanager
 def _refresh_guard() -> Iterator[None]:
     """Serialize refresh across Strix processes; the refresh token is single-use."""
+    if fcntl is None:  # Windows: no lock, callers stay correct without one.
+        yield
+        return
     try:
-        if fcntl is None:
-            yield
-            return
         lock_path = AUTH_PATH.with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = lock_path.open("w")
-    except (ImportError, OSError):
+    except OSError:
         yield
         return
     try:

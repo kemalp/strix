@@ -381,7 +381,7 @@ def _status(console: Console) -> int:
         return 0
 
     console.print("[green]Signed in[/] with a ChatGPT subscription.")
-    console.print(f"  Account: [bold]{record.get('account_id')}[/]")
+    console.print(f"  Account: [bold]{record.get('account_id') if record else 'unknown'}[/]")
     if codex.subscription_model(settings.llm.model):
         console.print(f"  Runs use the subscription (STRIX_LLM=[bold]{settings.llm.model}[/]).")
     else:
