@@ -35,13 +35,13 @@ reports the conflict in that file — resolve it there and keep the `claude/` ro
 `claude-subscription` is protected against force-pushes and deletion, and two checks must
 report green: `lint` and `pytest (fast)`.
 
-It deliberately does not require the full `pytest (3.12)` / `pytest (3.14)` matrix. That
-matrix takes over five minutes on a warm local machine, longer on a cold runner, and the
-workflow runs with `cancel-in-progress: true` — so any follow-up push cancels it and the
-check is left `cancelled` rather than green. Gating on it would mean a check that rarely
-resolves. `pytest (fast)` runs the config, routing and auth tests in about ten seconds and is
-the signal that actually matters here; the full matrix still runs and its result is there to
-read when a run happens to finish.
+It deliberately does not require the full `pytest (3.12)` / `pytest (3.14)` matrix, because
+that matrix does not pass — it outruns the 15-minute job timeout and is cancelled at 15m16s.
+The workflow also sets `cancel-in-progress: true`, so any follow-up push cancels the matrix
+outright; a cancelled matrix is the normal outcome. Gating on it would mean a check that
+never resolves. `pytest (fast)` covers the config, routing and auth tests in about 25 seconds
+and is the signal that actually matters here. The full matrix still runs and its log is there
+to read when a run does finish.
 
 Admins are not enforced, so a direct `git push` to `claude-subscription` overrides the
 checks. Pushes only get the "2 of 2 required status checks are expected" warning, not a
