@@ -49,6 +49,29 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv run --frozen pytest -q
 
+  # A fast subset, so a fork's pushes get a real test signal even if the full
+  # matrix is slow or killed at the job timeout. Keep this selector narrow: it
+  # has to stay comfortably inside a few minutes to be worth gating on.
+  pytest-fast:
+    name: pytest (fast)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python-env
+      - run: >-
+          uv run --frozen pytest -q
+          tests/test_config_loader.py
+          tests/test_models.py
+          tests/test_auth_cli.py
+          tests/test_claude_subscription.py
+          tests/test_claude_subscription_route.py
+          tests/test_preflight_timeout.py
+          tests/test_llm_extra_headers.py
+          tests/test_pricing.py
+
   tui:
     runs-on: ubuntu-latest
     timeout-minutes: 15
